@@ -4,6 +4,7 @@ import (
 	"errors"
 	cp "github.com/otiai10/copy"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -25,7 +26,7 @@ func InitEmptyWorkDir() *WorkDir {
 
 func (wd WorkDir) Clone() *WorkDir {
 	t := time.Now()
-	rootDirectory := "clones/" + t.Format("20060102150405") + "/"
+	rootDirectory := "clones/" + strconv.FormatInt(t.Unix(), 10) + "/"
 	err := os.MkdirAll(rootDirectory, 0666)
 	if err != nil {
 		panic(err)
@@ -102,7 +103,7 @@ func (wd WorkDir) ListFilesRoot() []string {
 	}
 	var newFiles []string
 	for _, item := range files {
-		newFiles = append(newFiles, strings.TrimLeft(item, wd.RootDirectory))
+		newFiles = append(newFiles, strings.TrimPrefix(item, wd.RootDirectory))
 	}
 	filesArr = []string{}
 	return newFiles
@@ -128,10 +129,13 @@ func getListOfAllFile(path string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = dir.Close()
-	if err != nil {
-		return nil, err
-	}
+	defer func(dir *os.File) {
+		err := dir.Close()
+		if err != nil {
+
+		}
+	}(dir)
+
 	files, err := dir.Readdir(-1)
 	if err != nil {
 		return nil, err
@@ -147,4 +151,12 @@ func getListOfAllFile(path string) ([]string, error) {
 		}
 	}
 	return filesArr, nil
+}
+
+func GetModTimeOfFile(filename string) int64 {
+	stat, err := os.Stat(filename)
+	if err != nil {
+		panic(err)
+	}
+	return stat.ModTime().UnixNano()
 }
