@@ -1,19 +1,24 @@
 package commands
 
 import (
-	"time"
+	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"vc/workdir"
 )
-
-type FileHistory struct {
-	FilesInfo map[string]int64
-}
 
 type VC struct {
 	wd          *workdir.WorkDir
 	status      *Status
-	commits     map[int]string
-	fileHistory *FileHistory
+	commits     map[int]*CommitContent
+	fileHistory map[string]string
+}
+
+type CommitContent struct {
+	Message string
+	Files   map[string]string
 }
 
 type Status struct {
@@ -28,10 +33,8 @@ func Init(wd *workdir.WorkDir) *VC {
 			ModifiedFiles: []string{},
 			StagedFiles:   []string{},
 		},
-		commits: make(map[int]string),
-		fileHistory: &FileHistory{
-			FilesInfo: make(map[string]int64),
-		},
+		commits:     make(map[int]*CommitContent),
+		fileHistory: make(map[string]string),
 	}
 }
 
@@ -40,19 +43,19 @@ func (vc VC) GetWorkDir() *workdir.WorkDir {
 }
 
 func (vc VC) Status() *Status {
-	if len(vc.fileHistory.FilesInfo) == 0 {
+	if len(vc.fileHistory) == 0 {
 		return vc.status
 	}
 	for _, file := range vc.wd.ListFilesRoot() {
-		lastStatusTime, ok := vc.fileHistory.FilesInfo[file]
+		lastStatus, ok := vc.fileHistory[file]
 		if ok {
-			lastModifiedTime := workdir.GetModTimeOfFile(vc.wd.RootDirectory + file)
-			if lastStatusTime < lastModifiedTime {
-				vc.fileHistory.FilesInfo[file] = time.Now().UnixNano()
+			lastModified, _ := vc.wd.CatFile(file)
+			if lastStatus != lastModified {
+				vc.fileHistory[file] = lastModified
 				vc.status.ModifiedFiles = append(vc.status.ModifiedFiles, file)
 			}
 		} else {
-			vc.fileHistory.FilesInfo[file] = time.Now().UnixNano()
+			vc.fileHistory[file], _ = vc.wd.CatFile(file)
 			vc.status.ModifiedFiles = append(vc.status.ModifiedFiles, file)
 		}
 	}
@@ -62,7 +65,7 @@ func (vc VC) Status() *Status {
 func (vc VC) AddAll() {
 	files := vc.wd.ListFilesRoot()
 	for _, file := range files {
-		vc.fileHistory.FilesInfo[file] = time.Now().UnixNano()
+		vc.fileHistory[file], _ = vc.wd.CatFile(file)
 		vc.status.ModifiedFiles = removeFromSlice(vc.status.ModifiedFiles, file)
 		vc.status.StagedFiles = removeFromSlice(vc.status.StagedFiles, file)
 		vc.status.StagedFiles = append(vc.status.StagedFiles, file)
@@ -72,14 +75,21 @@ func (vc VC) AddAll() {
 func (vc VC) Commit(message string) {
 	totalCommit := len(vc.commits)
 	totalCommit++
-	vc.commits[totalCommit] = message
+	files := make(map[string]string)
+	for key, value := range vc.fileHistory {
+		files[key] = value
+	}
+	vc.commits[totalCommit] = &CommitContent{
+		Message: message,
+		Files:   files,
+	}
 	vc.status.StagedFiles = []string{}
 	vc.status.ModifiedFiles = []string{}
 }
 
 func (vc VC) Add(files ...string) {
 	for _, file := range files {
-		vc.fileHistory.FilesInfo[file] = time.Now().UnixNano()
+		vc.fileHistory[file], _ = vc.wd.CatFile(file)
 		vc.status.ModifiedFiles = removeFromSlice(vc.status.ModifiedFiles, file)
 		vc.status.StagedFiles = removeFromSlice(vc.status.StagedFiles, file)
 		vc.status.StagedFiles = append(vc.status.StagedFiles, file)
@@ -87,13 +97,52 @@ func (vc VC) Add(files ...string) {
 }
 
 func (vc VC) Checkout(s string) (*workdir.WorkDir, error) {
-	return nil, nil
+	commitId := len(vc.commits) - convert(s)
+	commit, ok := vc.commits[commitId]
+	if ok {
+		rootDirectory := vc.wd.RootDirectory + strconv.Itoa(commitId) + "/"
+		if _, err := os.Stat(rootDirectory); errors.Is(err, os.ErrNotExist) {
+			err := os.Mkdir(rootDirectory, 0666)
+			if err != nil {
+				panic(err)
+			}
+			for key, value := range commit.Files {
+				if !strings.Contains(key, ".") {
+					err := os.MkdirAll(rootDirectory+key, 0660)
+					if err != nil {
+						return nil, err
+					}
+				} else {
+					err := os.MkdirAll(filepath.Dir(rootDirectory+key), 0660)
+					if err != nil {
+						return nil, err
+					}
+
+					f, err := os.Create(rootDirectory + key)
+					if err != nil {
+						return nil, err
+					}
+					err = os.WriteFile(rootDirectory+key, []byte(value), 0666)
+					if err != nil {
+						return nil, err
+					}
+					err = f.Close()
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+		}
+		return &workdir.WorkDir{RootDirectory: rootDirectory}, nil
+	} else {
+		return nil, errors.New("invalid commit")
+	}
 }
 
 func (vc VC) Log() []string {
 	commitsMessage := make([]string, 0)
 	for i := len(vc.commits); i >= 1; i-- {
-		commitsMessage = append(commitsMessage, vc.commits[i])
+		commitsMessage = append(commitsMessage, vc.commits[i].Message)
 	}
 	return commitsMessage
 }
@@ -105,4 +154,15 @@ func removeFromSlice(s []string, r string) []string {
 		}
 	}
 	return s
+}
+
+func convert(s string) int {
+	if strings.HasPrefix(s, "~") {
+		i, _ := strconv.Atoi(s[1:])
+		return i
+	} else if strings.HasPrefix(s, "^") {
+		return len(s)
+	} else {
+		return 0
+	}
 }

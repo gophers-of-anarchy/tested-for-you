@@ -3,6 +3,7 @@ package workdir
 import (
 	"errors"
 	cp "github.com/otiai10/copy"
+	"math/rand"
 	"os"
 	"strconv"
 	"strings"
@@ -25,8 +26,7 @@ func InitEmptyWorkDir() *WorkDir {
 }
 
 func (wd WorkDir) Clone() *WorkDir {
-	t := time.Now()
-	rootDirectory := "clones/" + strconv.FormatInt(t.Unix(), 10) + "/"
+	rootDirectory := "clones/" + strconv.FormatInt(time.Now().UnixNano(), 10) + "_" + strconv.Itoa(rand.Intn(1000)) + "/"
 	err := os.MkdirAll(rootDirectory, 0666)
 	if err != nil {
 		panic(err)
